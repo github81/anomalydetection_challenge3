@@ -1,12 +1,10 @@
 #!/usr/bin/python
 
 from __future__ import print_function
-from math import sqrt
 from collections import defaultdict
 import sys
 import json
 import statistics
-from statistics import pstdev
 
 class User:
     
@@ -43,11 +41,12 @@ class User:
     def getPurchases(self):
         return self.purchases
    
-def getNetworkPurchases(users, mainUserId, userId, traversedNetwork, degree):
+def getNetworkPurchases(users, mainUserId, userId, traversedNetwork, degree, minUsers=0):
   
-    #recursively get all the purchases in the network
+    #recursively get all the purchases in the network with a given degree
+    #or recursively get all the purhcases in the network with a minimum number of users
     allPurchases = []
-    if(degree > 0):  
+    if(degree > 0 or len(traversedNetwork.keys()) <= minUsers):  
         if (userId not in users):
             return;
         user = users[userId]
@@ -57,7 +56,7 @@ def getNetworkPurchases(users, mainUserId, userId, traversedNetwork, degree):
             if(traversedNetwork.__contains__(friendid)):
                 continue
             traversedNetwork[friendid] = True
-            allPurchases = friendobj.getPurchases() + getNetworkPurchases(users, mainUserId, friendid, traversedNetwork, degree-1)
+            allPurchases = friendobj.getPurchases() + getNetworkPurchases(users, mainUserId, friendid, traversedNetwork, degree-1, minUsers)
             
     return allPurchases        
             
@@ -93,6 +92,7 @@ def printPurchases(users):
 
 def buildPurchaseNetwork(users, event_type, timestamp, id, id2="NA",amount=0.0):
 
+    #add a new user and keep track of the purchase amount/timestamp
     if(event_type == 'purchase'):
         if(id in users):
             oldUser = users[id]
@@ -102,6 +102,8 @@ def buildPurchaseNetwork(users, event_type, timestamp, id, id2="NA",amount=0.0):
             newUser.addPurchase(timestamp, amount)
             users[id] = newUser
 
+    #add a friend to the user's friends list
+    #and vice versa
     if(event_type == 'befriend'):
         if(id in users):
             addFriendToNetwork(users,id,id2)
@@ -110,30 +112,28 @@ def buildPurchaseNetwork(users, event_type, timestamp, id, id2="NA",amount=0.0):
             users[id] = newUser
             addFriendToNetwork(users,id,id2)
 
+    #remove a friend from the user's friends list
+    #and vice versa
     if(event_type == 'unfriend'):
         if(id in users):
             unfriendFromNetwork(users, id, id2)
         if(id2 in users):
             unfriendFromNetwork(users, id2, id)
 
-def findAnomalousPurchase(users, id, amount, degree, purchases, logData, flaggedHandler):
+def findAnomalousPurchase(users, id, amount, degree, purchases, logData, flaggedHandler, minUsers=0):
     traversedNetwork = defaultdict()
 
     #get all the purchases in the network with a given degree
-    networkPurchases = getNetworkPurchases(users,id,id,traversedNetwork, int(degree))
-
+    networkPurchases = getNetworkPurchases(users,id,id,traversedNetwork, int(degree),minUsers)
     #sort the purchases in descending order
     networkPurchases.sort(key=lambda x:x['Timestamp'], reverse=True)
-
     #get first T purchases
     networkPurchases = networkPurchases[:int(purchases)]
-
     #get the list of all the amounts
     #and calcualte the mean and standard deviation    
     data = [float(k['Amount']) for k in networkPurchases]
     mean = round(statistics.mean(data),2)
     pstdev = round(statistics.pstdev(data),2)
-
     #flag the purchase if the amount is greater than
     #mean+(3*standard deviation)
     if (float(amount) > (mean + (3 * pstdev))):
@@ -147,18 +147,27 @@ def main(argv):
     #hash table to store Users
     users = defaultdict()
       
-    if len(argv) is not 3:    
-        print('python ./src/process_log.py ../log_input/batch_log.json ../log_input/stream_log.json ../log_output/flagged_purchases.json')        
+    if len(argv) > 5:    
+        print('python ./src/process_log.py ../log_input/batch_log.json ../log_input/stream_log.json ../log_output/flagged_purchases.json (optional)-N 20')        
         sys.exit(2)
     
     batchFile = argv[0]
     streamFile = argv[1]
     flaggedPurchasesFile = argv[2]
-    
+    minUsers = 0
+    #get the optional argument
+    #-N <minimum number of users>
+    try:
+        if(argv[3] == "-N"):
+            minUsers = argv[4]
+    except IndexError:
+        minUsers = 0
+        
     firstLine = True
     degree = 1
     purchases = 2
-    #read the batch file and build a network (n-ary tree)
+    #read the batch file and build a network
+    #the network will be a tree with n-nodes
     with open(batchFile, 'rb') as batchInput:
         for batchLine in batchInput:
             logData = json.loads(batchLine)
@@ -194,9 +203,8 @@ def main(argv):
             if(event_type == 'purchase'):
                 id = logData['id']
                 amount = logData['amount']
-                findAnomalousPurchase(users,id,amount,degree,purchases,logData,flaggedHandler)
+                findAnomalousPurchase(users,id,amount,degree,purchases,logData,flaggedHandler,int(minUsers))
 
-                    
 if __name__=="__main__":
     main(sys.argv[1:])            
             
